@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+/* ── Nova Face Animations ──────────────────────────────────────────────── */
+@keyframes nova-idle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@keyframes nova-thinking-dot {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.7); }
+  40% { opacity: 1; transform: scale(1.1); }
+}
+@keyframes nova-blink {
+  0%, 88%, 100% { transform: scaleY(1); }
+  93% { transform: scaleY(0.08); }
+  96% { transform: scaleY(1); }
+}
+@keyframes nova-talking {
+  0%, 100% { d: path("M40 64 Q50 58 60 64"); }
+  50% { d: path("M40 64 Q50 72 60 64"); }
+}
+@keyframes nova-shake {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(-3deg); }
+  40% { transform: rotate(3deg); }
+  60% { transform: rotate(-2deg); }
+  80% { transform: rotate(2deg); }
+}
+@keyframes nova-bounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  30% { transform: translateY(-6px) scale(1.04); }
+  60% { transform: translateY(-2px) scale(1.01); }
+}
+@keyframes nova-sparkle {
+  0%, 100% { opacity: 0; transform: scale(0.5) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1.2) rotate(180deg); }
+}
+@keyframes nova-tear {
+  0% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(14px); opacity: 0; }
+}
+@keyframes nova-pulse-glow {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes nova-writing {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  20% { transform: translateY(-6px) rotate(-2deg); }
+  50% { transform: translateY(-8px) rotate(0deg); }
+  80% { transform: translateY(-6px) rotate(2deg); }
+}
+
+.nova-idle { animation: nova-idle 3s ease-in-out infinite; }
+.nova-thinking { animation: nova-writing 0.9s ease-in-out infinite; }
+.nova-shake { animation: nova-shake 0.5s ease-in-out infinite; }
+.nova-bounce { animation: nova-bounce 0.8s ease-in-out infinite; }
+
+.nova-dot-1 { animation: nova-thinking-dot 1.4s ease-in-out infinite 0s; }
+.nova-dot-2 { animation: nova-thinking-dot 1.4s ease-in-out infinite 0.2s; }
+.nova-dot-3 { animation: nova-thinking-dot 1.4s ease-in-out infinite 0.4s; }
+
+.nova-blink {
+  animation: nova-blink 4s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center center;
+}
+.nova-sparkle-1 { animation: nova-sparkle 1.6s ease-in-out infinite 0s; }
+.nova-sparkle-2 { animation: nova-sparkle 1.6s ease-in-out infinite 0.4s; }
+.nova-sparkle-3 { animation: nova-sparkle 1.6s ease-in-out infinite 0.8s; }
+.nova-tear { animation: nova-tear 2s ease-in infinite; }
+.nova-glow { animation: nova-pulse-glow 2s ease-in-out infinite; }
+.nova-talk-mouth { animation: nova-talking 0.5s ease-in-out infinite; }
