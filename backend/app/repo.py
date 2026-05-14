@@ -4,27 +4,78 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from .models import Conversation, Document, Message, User
+from .models import Conversation, Document, GoogleCredential, Message, User
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
-
-async def create_user(session: AsyncSession, email: str, name: str, hashed_pw: str) -> User:
-    user = User(email=email, name=name, hashed_password=hashed_pw)
-    session.add(user)
-    await session.commit()
-    await session.refresh(user)
-    return user
-
 
 async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
     result = await session.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()
 
 
+async def get_or_create_google_user(
+    session: AsyncSession, *, email: str, name: str, google_sub: str, avatar_url: str | None,
+) -> User:
+    """Find a user by their Google account, creating one on first sign-in."""
+    result = await session.execute(select(User).where(User.google_sub == google_sub))
+    user = result.scalar_one_or_none()
+    if not user:
+        user = await get_user_by_email(session, email)  # link a pre-existing email row
+    if user:
+        user.name = name or user.name
+        user.google_sub = google_sub
+        user.avatar_url = avatar_url
+    else:
+        user = User(email=email, name=name or email.split("@")[0],
+                    google_sub=google_sub, avatar_url=avatar_url)
+        session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
 async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
     result = await session.execute(select(User).where(User.id == user_id))
     return result.scalar_one_or_none()
+
+
+async def set_onboarded(session: AsyncSession, user_id: str) -> None:
+    user = await get_user_by_id(session, user_id)
+    if user and not user.is_onboarded:
+        user.is_onboarded = True
+        await session.commit()
+
+
+# ── Google credentials ────────────────────────────────────────────────────────
+
+async def get_google_credential(session: AsyncSession, user_id: str) -> GoogleCredential | None:
+    result = await session.execute(
+        select(GoogleCredential).where(GoogleCredential.user_id == user_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_google_credential(session: AsyncSession, user_id: str, **fields) -> GoogleCredential:
+    cred = await get_google_credential(session, user_id)
+    if cred:
+        for key, value in fields.items():
+            setattr(cred, key, value)
+    else:
+        cred = GoogleCredential(user_id=user_id, **fields)
+        session.add(cred)
+    await session.commit()
+    await session.refresh(cred)
+    return cred
+
+
+async def delete_google_credential(session: AsyncSession, user_id: str) -> bool:
+    cred = await get_google_credential(session, user_id)
+    if not cred:
+        return False
+    await session.delete(cred)
+    await session.commit()
+    return True
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────

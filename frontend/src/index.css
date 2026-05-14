@@ -1,10 +1,115 @@
 @import "tailwindcss";
 
-/* ── Nova Face Animations ──────────────────────────────────────────────── */
-@keyframes nova-idle {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+/* ── Design tokens ─────────────────────────────────────────────────────── */
+@theme {
+  --color-void: #07060f;
+  --color-deep: #0c0a1a;
+  --color-surface: #14122b;
+  --color-nova-violet: #8b5cf6;
+  --color-nova-indigo: #6366f1;
+  --color-nova-cyan: #22d3ee;
+  --color-nova-pink: #ec4899;
+  --color-ink: #e9e7f7;
+  --color-muted: #9b97c4;
 }
+
+:root {
+  --glass-bg: rgba(255, 255, 255, 0.045);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-bg-strong: rgba(255, 255, 255, 0.07);
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--color-void);
+  color: var(--color-ink);
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Aurora background ─────────────────────────────────────────────────── */
+.aurora { position: relative; isolation: isolate; }
+.aurora::before {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  z-index: -1;
+  background:
+    radial-gradient(40% 40% at 18% 28%, rgba(139, 92, 246, 0.22), transparent 70%),
+    radial-gradient(35% 35% at 82% 18%, rgba(34, 211, 238, 0.16), transparent 70%),
+    radial-gradient(45% 45% at 65% 88%, rgba(236, 72, 153, 0.13), transparent 70%);
+  animation: aurora 24s ease-in-out infinite;
+}
+@keyframes aurora {
+  0%, 100% { transform: translate(0, 0) rotate(0deg) scale(1); }
+  50%      { transform: translate(3%, 2.5%) rotate(9deg) scale(1.08); }
+}
+
+/* ── Glass + glow utilities ───────────────────────────────────────────── */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--glass-border);
+}
+.glass-strong {
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid var(--glass-border);
+}
+.glow-violet { box-shadow: 0 0 28px -6px rgba(139, 92, 246, 0.55); }
+.glow-cyan   { box-shadow: 0 0 28px -6px rgba(34, 211, 238, 0.45); }
+
+.gradient-text {
+  background: linear-gradient(120deg, #c4b5fd, #67e8f9 60%, #f9a8d4);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.btn-gradient {
+  background: linear-gradient(120deg, var(--color-nova-indigo), var(--color-nova-violet));
+  transition: filter 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+.btn-gradient:hover:not(:disabled) {
+  filter: brightness(1.12);
+  box-shadow: 0 0 26px -6px rgba(139, 92, 246, 0.7);
+}
+.btn-gradient:active:not(:disabled) { transform: translateY(1px); }
+
+/* ── Scrollbar ────────────────────────────────────────────────────────── */
+* { scrollbar-width: thin; scrollbar-color: rgba(139,92,246,0.35) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.32);
+  border-radius: 99px;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, 0.5); }
+
+/* ── Misc animations ──────────────────────────────────────────────────── */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-rise { animation: rise 0.32s ease-out both; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50%      { opacity: 1; transform: scale(1); }
+}
+.pulse-dot { animation: pulse-dot 1s ease-in-out infinite; }
+
+@keyframes caret-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+.stream-caret::after {
+  content: "▍";
+  margin-left: 1px;
+  color: var(--color-nova-violet);
+  animation: caret-blink 1s step-end infinite;
+}
+
+/* ── Nova Face animations (preserved) ─────────────────────────────────── */
+@keyframes nova-idle { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 @keyframes nova-thinking-dot {
   0%, 80%, 100% { opacity: 0.2; transform: scale(0.7); }
   40% { opacity: 1; transform: scale(1.1); }
@@ -14,16 +119,10 @@
   93% { transform: scaleY(0.08); }
   96% { transform: scaleY(1); }
 }
-@keyframes nova-talking {
-  0%, 100% { d: path("M40 64 Q50 58 60 64"); }
-  50% { d: path("M40 64 Q50 72 60 64"); }
-}
 @keyframes nova-shake {
   0%, 100% { transform: rotate(0deg); }
-  20% { transform: rotate(-3deg); }
-  40% { transform: rotate(3deg); }
-  60% { transform: rotate(-2deg); }
-  80% { transform: rotate(2deg); }
+  20% { transform: rotate(-3deg); } 40% { transform: rotate(3deg); }
+  60% { transform: rotate(-2deg); } 80% { transform: rotate(2deg); }
 }
 @keyframes nova-bounce {
   0%, 100% { transform: translateY(0) scale(1); }
@@ -38,27 +137,20 @@
   0% { transform: translateY(0); opacity: 1; }
   100% { transform: translateY(14px); opacity: 0; }
 }
-@keyframes nova-pulse-glow {
-  0%, 100% { opacity: 0.6; }
-  50% { opacity: 1; }
-}
-
+@keyframes nova-pulse-glow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 @keyframes nova-writing {
   0%, 100% { transform: translateY(0) rotate(0deg); }
   20% { transform: translateY(-6px) rotate(-2deg); }
   50% { transform: translateY(-8px) rotate(0deg); }
   80% { transform: translateY(-6px) rotate(2deg); }
 }
-
 .nova-idle { animation: nova-idle 3s ease-in-out infinite; }
 .nova-thinking { animation: nova-writing 0.9s ease-in-out infinite; }
 .nova-shake { animation: nova-shake 0.5s ease-in-out infinite; }
 .nova-bounce { animation: nova-bounce 0.8s ease-in-out infinite; }
-
 .nova-dot-1 { animation: nova-thinking-dot 1.4s ease-in-out infinite 0s; }
 .nova-dot-2 { animation: nova-thinking-dot 1.4s ease-in-out infinite 0.2s; }
 .nova-dot-3 { animation: nova-thinking-dot 1.4s ease-in-out infinite 0.4s; }
-
 .nova-blink {
   animation: nova-blink 4s ease-in-out infinite;
   transform-box: fill-box;
@@ -69,4 +161,37 @@
 .nova-sparkle-3 { animation: nova-sparkle 1.6s ease-in-out infinite 0.8s; }
 .nova-tear { animation: nova-tear 2s ease-in infinite; }
 .nova-glow { animation: nova-pulse-glow 2s ease-in-out infinite; }
-.nova-talk-mouth { animation: nova-talking 0.5s ease-in-out infinite; }
+
+/* ── Markdown ─────────────────────────────────────────────────────────── */
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md p { margin: 0.4rem 0; line-height: 1.6; }
+.md ul, .md ol { margin: 0.4rem 0; padding-left: 1.25rem; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 0.15rem 0; }
+.md h1, .md h2, .md h3 { margin: 0.7rem 0 0.35rem; font-weight: 700; line-height: 1.3; }
+.md h1 { font-size: 1.15rem; } .md h2 { font-size: 1.05rem; } .md h3 { font-size: 1rem; }
+.md code {
+  background: rgba(139, 92, 246, 0.16);
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+.md pre {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--glass-border);
+  padding: 0.75rem;
+  border-radius: 10px;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.md pre code { background: none; padding: 0; }
+.md a { color: #7dd3fc; text-decoration: underline; }
+.md strong { color: #fff; }
+.md blockquote {
+  border-left: 3px solid var(--color-nova-violet);
+  padding-left: 0.75rem;
+  margin: 0.5rem 0;
+  color: var(--color-muted);
+}

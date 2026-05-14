@@ -10,29 +10,12 @@ from pydantic import BaseModel, Field
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
-class RegisterRequest(BaseModel):
-    email: str
-    password: str = Field(..., min_length=4)
-    name: str = ""
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class AuthResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user_id: str
-    email: str
-    name: str
-
-
 class UserResponse(BaseModel):
     id: str
     email: str
     name: str
+    avatar_url: Optional[str] = None
+    is_onboarded: bool = False
     created_at: datetime
     model_config = {"from_attributes": True}
 

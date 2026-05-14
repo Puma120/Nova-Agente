@@ -1,45 +1,50 @@
-"""RAG Service — ChromaDB vector store with Gemini embeddings."""
+"""RAG Service — Pinecone vector store with pluggable embeddings."""
 
 import hashlib
 import logging
 import os
+import time
 import uuid
-from pathlib import Path
 
-import chromadb
-from google import genai
-from google.genai import types
+from pinecone import Pinecone, ServerlessSpec
 from pypdf import PdfReader
 
 from .config import settings
+from .llm_provider import embed_query, embed_texts
 
 logger = logging.getLogger("nova-agent")
+
+# Single index, two namespaces — replaces the old two ChromaDB collections.
+_KB_NS = "knowledge"
+_MEM_NS = "memory"
 
 
 class RAGService:
     def __init__(self):
-        self._client: chromadb.ClientAPI | None = None
-        self._collection: chromadb.Collection | None = None
-        self._memory_collection: chromadb.Collection | None = None
-        self._genai_client: genai.Client | None = None
+        self._pc: Pinecone | None = None
+        self._index = None
         self._initialized = False
 
     def initialize(self) -> None:
         if self._initialized:
             return
-        self._genai_client = genai.Client(api_key=settings.gemini_api_key)
-        self._client = chromadb.PersistentClient(path=settings.chroma_persist_dir)
-        self._collection = self._client.get_or_create_collection(
-            name=settings.chroma_collection_name, metadata={"hnsw:space": "cosine"},
-        )
-        self._memory_collection = self._client.get_or_create_collection(
-            name="nova_memory", metadata={"hnsw:space": "cosine"},
-        )
+        self._pc = Pinecone(api_key=settings.pinecone_api_key)
+        name = settings.pinecone_index_name
+        existing = {i["name"] for i in self._pc.list_indexes()}
+        if name not in existing:
+            logger.info("[RAG] Creating Pinecone index '%s' (dim=%d)", name, settings.embedding_dimension)
+            self._pc.create_index(
+                name=name,
+                dimension=settings.embedding_dimension,
+                metric="cosine",
+                spec=ServerlessSpec(cloud=settings.pinecone_cloud, region=settings.pinecone_region),
+            )
+            while not self._pc.describe_index(name).status["ready"]:
+                time.sleep(1)
+        self._index = self._pc.Index(name)
         self._initialized = True
-        logger.info(
-            "[RAG] ChromaDB ready: knowledge=%d docs, memory=%d docs",
-            self._collection.count(), self._memory_collection.count(),
-        )
+        stats = self._index.describe_index_stats()
+        logger.info("[RAG] Pinecone ready: %d vectors total", stats.get("total_vector_count", 0))
 
     # ── Text extraction ───────────────────────────────────────────────────────
 
@@ -67,24 +72,10 @@ class RAGService:
     # ── Embeddings ────────────────────────────────────────────────────────────
 
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
-        embeddings = []
-        for i in range(0, len(texts), 100):
-            batch = texts[i : i + 100]
-            result = self._genai_client.models.embed_content(
-                model=f"models/{settings.gemini_embedding_model}",
-                contents=batch,
-                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-            )
-            embeddings.extend([e.values for e in result.embeddings])
-        return embeddings
+        return embed_texts(texts)
 
     def _embed_query(self, query: str) -> list[float]:
-        result = self._genai_client.models.embed_content(
-            model=f"models/{settings.gemini_embedding_model}",
-            contents=query,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
-        )
-        return result.embeddings[0].values
+        return embed_query(query)
 
     # ── Ingestion ─────────────────────────────────────────────────────────────
 
@@ -107,12 +98,23 @@ class RAGService:
         if not chunks:
             return 0
         embeddings = self._embed_texts(chunks)
-        ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
-        metadatas = [
-            {"source": filename, "doc_id": doc_id, "chunk_index": i, "content_hash": content_hash, "user_id": user_id}
+        vectors = [
+            {
+                "id": f"{doc_id}_chunk_{i}",
+                "values": embeddings[i],
+                "metadata": {
+                    "text": chunks[i],
+                    "source": filename,
+                    "doc_id": doc_id,
+                    "chunk_index": i,
+                    "content_hash": content_hash,
+                    "user_id": user_id,
+                },
+            }
             for i in range(len(chunks))
         ]
-        self._collection.add(ids=ids, embeddings=embeddings, documents=chunks, metadatas=metadatas)
+        for i in range(0, len(vectors), 100):
+            self._index.upsert(vectors=vectors[i : i + 100], namespace=_KB_NS)
         logger.info("[RAG] Ingested '%s': %d chunks (user=%s)", filename, len(chunks), user_id or "global")
         return len(chunks)
 
@@ -129,13 +131,17 @@ class RAGService:
             with open(fpath, "r", encoding="utf-8") as f:
                 content = f.read()
             content_hash = hashlib.md5(content.encode()).hexdigest()
-            existing = self._collection.get(where={"source": fname}, include=["metadatas"])
-            if existing["ids"]:
-                old_hash = existing["metadatas"][0].get("content_hash", "") if existing["metadatas"] else ""
+            # Deterministic doc_id per filename so we can find prior chunks by ID prefix
+            doc_id = "kb_" + hashlib.md5(fname.encode()).hexdigest()
+            existing_ids = self._list_chunk_ids(doc_id)
+            if existing_ids:
+                fetched = self._index.fetch(ids=existing_ids[:1], namespace=_KB_NS)
+                old_hash = ""
+                for v in fetched.vectors.values():
+                    old_hash = v.metadata.get("content_hash", "")
                 if old_hash == content_hash:
                     continue
-                self._collection.delete(ids=existing["ids"])
-            doc_id = str(uuid.uuid4())
+                self._index.delete(ids=existing_ids, namespace=_KB_NS)
             if fname.lower().endswith(".md"):
                 count = await self.ingest_markdown(fpath, fname, doc_id, content_hash=content_hash)
             else:
@@ -148,48 +154,45 @@ class RAGService:
     async def search(self, query: str, user_id: str, top_k: int | None = None) -> list[dict]:
         """Search knowledge base + user-uploaded docs. Global docs (user_id='') are always visible."""
         self.initialize()
-        if self._collection.count() == 0:
-            return []
         k = top_k or settings.rag_top_k
         qe = self._embed_query(query)
-        # Fetch more results then filter, since ChromaDB $or is limited
-        results = self._collection.query(
-            query_embeddings=[qe],
-            n_results=min(k * 4, self._collection.count()),
-            include=["documents", "metadatas", "distances"],
+        results = self._index.query(
+            vector=qe,
+            top_k=k,
+            namespace=_KB_NS,
+            filter={"user_id": {"$in": ["", user_id]}},
+            include_metadata=True,
         )
         out = []
-        if results["documents"] and results["documents"][0]:
-            for doc, meta, dist in zip(
-                results["documents"][0], results["metadatas"][0], results["distances"][0],
-            ):
-                doc_user = meta.get("user_id", "")
-                # Allow: global (empty user_id) or belonging to this user
-                if doc_user == "" or doc_user == user_id:
-                    out.append({"content": doc, "source": meta.get("source", "unknown"), "score": 1 - dist})
-                if len(out) >= k:
-                    break
+        for match in results.get("matches", []):
+            meta = match.get("metadata") or {}
+            out.append({
+                "content": meta.get("text", ""),
+                "source": meta.get("source", "unknown"),
+                "score": match.get("score", 0.0),
+            })
         return out
 
     # ── Memory ────────────────────────────────────────────────────────────────
 
     async def search_memory(self, query: str, user_id: str, top_k: int = 5) -> list[dict]:
         self.initialize()
-        if self._memory_collection.count() == 0:
-            return []
         qe = self._embed_query(query)
-        results = self._memory_collection.query(
-            query_embeddings=[qe],
-            n_results=min(top_k, self._memory_collection.count()),
-            where={"user_id": user_id},
-            include=["documents", "metadatas", "distances"],
+        results = self._index.query(
+            vector=qe,
+            top_k=top_k,
+            namespace=_MEM_NS,
+            filter={"user_id": user_id},
+            include_metadata=True,
         )
         out = []
-        if results["documents"] and results["documents"][0]:
-            for doc, meta, dist in zip(
-                results["documents"][0], results["metadatas"][0], results["distances"][0],
-            ):
-                out.append({"content": doc, "source": "memory", "score": 1 - dist})
+        for match in results.get("matches", []):
+            meta = match.get("metadata") or {}
+            out.append({
+                "content": meta.get("text", ""),
+                "source": "memory",
+                "score": match.get("score", 0.0),
+            })
         return out
 
     async def save_memory(self, user_id: str, insight: str) -> None:
@@ -197,30 +200,50 @@ class RAGService:
         if not insight.strip():
             return
         embedding = self._embed_texts([insight])[0]
-        self._memory_collection.add(
-            ids=[str(uuid.uuid4())], embeddings=[embedding], documents=[insight],
-            metadatas=[{"user_id": user_id, "type": "conversation_insight"}],
+        self._index.upsert(
+            vectors=[{
+                "id": str(uuid.uuid4()),
+                "values": embedding,
+                "metadata": {"text": insight, "user_id": user_id, "type": "conversation_insight"},
+            }],
+            namespace=_MEM_NS,
         )
+
+    def _list_chunk_ids(self, doc_id: str) -> list[str]:
+        """Return all vector IDs belonging to a doc_id, via ID-prefix listing.
+
+        ``index.list()`` yields paginated responses that iterate over ``ListItem``
+        objects (or plain ID strings on older SDKs) — normalize both to strings.
+        """
+        ids: list[str] = []
+        for page in self._index.list(prefix=f"{doc_id}_chunk_", namespace=_KB_NS):
+            for item in page:
+                ids.append(getattr(item, "id", item))
+        return ids
 
     def delete_document_chunks(self, doc_id: str) -> None:
         self.initialize()
-        results = self._collection.get(where={"doc_id": doc_id}, include=[])
-        if results["ids"]:
-            self._collection.delete(ids=results["ids"])
+        ids = self._list_chunk_ids(doc_id)
+        if ids:
+            self._index.delete(ids=ids, namespace=_KB_NS)
 
     def get_document_chunks(self, doc_id: str, max_chunks: int = 12) -> list[dict]:
-        """Return stored chunks for a given ChromaDB doc_id."""
+        """Return stored chunks for a given doc_id, ordered by chunk_index."""
         self.initialize()
-        results = self._collection.get(
-            where={"doc_id": doc_id},
-            include=["documents", "metadatas"],
-        )
-        chunks = []
-        for doc, meta in zip(results.get("documents") or [], results.get("metadatas") or []):
-            chunks.append({"content": doc, "source": meta.get("source", "unknown")})
-            if len(chunks) >= max_chunks:
-                break
-        return chunks
+        ids = self._list_chunk_ids(doc_id)
+        if not ids:
+            return []
+        fetched = self._index.fetch(ids=ids, namespace=_KB_NS)
+        rows = []
+        for v in fetched.vectors.values():
+            meta = v.metadata or {}
+            rows.append({
+                "content": meta.get("text", ""),
+                "source": meta.get("source", "unknown"),
+                "chunk_index": int(meta.get("chunk_index", 0)),
+            })
+        rows.sort(key=lambda r: r["chunk_index"])
+        return [{"content": r["content"], "source": r["source"]} for r in rows[:max_chunks]]
 
 
 rag_service = RAGService()

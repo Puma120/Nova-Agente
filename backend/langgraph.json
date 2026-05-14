@@ -1,7 +1,7 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "chefsito": "./app/chef_agent.py:chef_graph"
+    "nova": "./app/nova_agent.py:nova_graph"
   },
   "env": ".env"
 }

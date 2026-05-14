@@ -1,35 +1,31 @@
 """Nova Agent — FastAPI application."""
 
+import json
 import logging
 import os
 import uuid
-import traceback
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .auth import create_access_token, decode_token, hash_password, verify_password
+from .auth import create_access_token, decode_token
 from .config import settings
 from .db import AsyncSessionLocal, init_db
-from .gemini_service import chat_with_rag, interpret_image
-from .chef_agent import chat_with_chef
+from . import google_calendar
+from .nova_agent import astream_nova, build_messages, chat_nova
+from .vision import interpret_image
 from .rag_service import rag_service
 from .schemas import (
-    AuthResponse,
     ChatRequest,
     ChatResponse,
     ConversationDetailResponse,
     ConversationResponse,
     DocumentListResponse,
     DocumentUploadResponse,
-    LoginRequest,
-    MessageResponse,
     RAGSearchRequest,
-    RegisterRequest,
     UserResponse,
 )
 from . import repo
@@ -101,30 +97,30 @@ async def startup():
     logger.info("[Startup] Knowledge base: %d new chunks ingested", kb_count)
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ── Auth — Sign in with Google ────────────────────────────────────────────────
 
-@app.post("/auth/register", response_model=AuthResponse)
-async def register(body: RegisterRequest, session: AsyncSession = Depends(get_db)):
-    existing = await repo.get_user_by_email(session, body.email)
-    if existing:
-        raise HTTPException(409, "Email ya registrado")
-    hashed = hash_password(body.password)
-    user = await repo.create_user(session, body.email, body.name or body.email.split("@")[0], hashed)
+@app.get("/auth/google/login")
+async def google_login():
+    """Return the Google consent URL. One consent grants identity + Calendar."""
+    if not google_calendar.is_configured():
+        raise HTTPException(503, "Google OAuth no esta configurado en el servidor")
+    return {"auth_url": google_calendar.build_login_url()}
+
+
+@app.get("/integrations/google/callback")
+async def google_callback(
+    code: str = "", error: str = "", session: AsyncSession = Depends(get_db),
+):
+    """OAuth redirect target — completes sign-in and bounces back to the UI with a token."""
+    if error or not code:
+        return RedirectResponse(f"{settings.frontend_url}/?auth=error")
+    try:
+        user = await google_calendar.complete_login(session, code)
+    except Exception as exc:
+        logger.error("[google_callback] %s", exc, exc_info=True)
+        return RedirectResponse(f"{settings.frontend_url}/?auth=error")
     token = create_access_token({"sub": user.id, "email": user.email})
-    return AuthResponse(
-        access_token=token, user_id=user.id, email=user.email, name=user.name,
-    )
-
-
-@app.post("/auth/login", response_model=AuthResponse)
-async def login(body: LoginRequest, session: AsyncSession = Depends(get_db)):
-    user = await repo.get_user_by_email(session, body.email)
-    if not user or not verify_password(body.password, user.hashed_password):
-        raise HTTPException(401, "Credenciales incorrectas")
-    token = create_access_token({"sub": user.id, "email": user.email})
-    return AuthResponse(
-        access_token=token, user_id=user.id, email=user.email, name=user.name,
-    )
+    return RedirectResponse(f"{settings.frontend_url}/?token={token}")
 
 
 @app.get("/auth/me", response_model=UserResponse)
@@ -134,47 +130,84 @@ async def me(user=Depends(get_current_user)):
 
 # ── Chat ──────────────────────────────────────────────────────────────────────
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(
-    body: ChatRequest,
-    user=Depends(get_current_user),
-    session: AsyncSession = Depends(get_db),
-):
-    # Get or create conversation
+def _sse(payload: dict) -> str:
+    """Format a dict as a Server-Sent Events frame."""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _prepare_chat(body: ChatRequest, user, session):
+    """Resolve the conversation, persist the user message, and assemble the LLM
+    message list. Shared by the streaming and non-streaming chat endpoints."""
     if body.conversation_id:
         conv = await repo.get_conversation(session, body.conversation_id)
         if not conv or conv.user_id != user.id:
             raise HTTPException(404, "Conversacion no encontrada")
     else:
         title = body.message[:60] + ("..." if len(body.message) > 60 else "")
-        conv = await repo.create_conversation(session, user.id, title, mode=body.mode)
+        conv = await repo.create_conversation(session, user.id, title, mode="nova")
 
-    # Build history
-    messages = await repo.get_messages(session, conv.id)
-    history = [{"role": m.role, "content": m.content} for m in messages]
+    db_messages = await repo.get_messages(session, conv.id)
+    history = [{"role": m.role, "content": m.content} for m in db_messages]
 
-    # Save user message
-    await repo.add_message(session, conv.id, "user", body.message, image_url="[image]" if body.image_base64 else None)
+    await repo.add_message(
+        session, conv.id, "user", body.message,
+        image_url="[image]" if body.image_base64 else None,
+    )
 
-    # Fetch user's uploaded docs for context
     user_docs = await repo.get_all_documents(session, user.id)
     doc_names = [d.filename for d in user_docs]
 
-    # Generate response — route to the right agent based on mode
-    if body.mode == "chef":
-        response_text, sources, emotion = await chat_with_chef(
-            body.message, history, user.id, image_base64=body.image_base64,
-        )
-    else:
-        response_text, sources, emotion = await chat_with_rag(
-            body.message, history, user.id, image_base64=body.image_base64,
-            user_docs=doc_names,
-        )
+    messages = await build_messages(
+        body.message, history, user.id,
+        image_base64=body.image_base64,
+        user_docs=doc_names,
+        onboarding=not user.is_onboarded,
+    )
+    return conv, messages
 
-    # Save assistant message
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(
+    body: ChatRequest,
+    user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    conv, messages = await _prepare_chat(body, user, session)
+    response_text, sources, emotion = await chat_nova(messages, user.id)
     await repo.add_message(session, conv.id, "assistant", response_text)
-
     return ChatResponse(conversation_id=conv.id, response=response_text, sources=sources, emotion=emotion)
+
+
+@app.post("/chat/stream")
+async def chat_stream(
+    body: ChatRequest,
+    user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Streams Nova's reasoning as Server-Sent Events: `conversation` first, then a
+    mix of `step` / `token` / `emotion` / `sources`, and finally `done`."""
+    conv, messages = await _prepare_chat(body, user, session)
+    user_id = user.id
+
+    async def event_gen():
+        full_text, emotion = "", "neutral"
+        yield _sse({"type": "conversation", "conversation_id": conv.id})
+        try:
+            async for event in astream_nova(messages, user_id):
+                if event["type"] == "done":
+                    full_text, emotion = event["text"], event["emotion"]
+                yield _sse(event)
+        except Exception as exc:  # surface failures to the client instead of hanging
+            logger.error("[chat_stream] %s", exc, exc_info=True)
+            yield _sse({"type": "error", "message": str(exc)})
+            return
+        # Persist the assistant message with a fresh session — the request-scoped
+        # one may already be closing as the stream drains.
+        if full_text:
+            async with AsyncSessionLocal() as s:
+                await repo.add_message(s, conv.id, "assistant", full_text)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────
@@ -222,7 +255,7 @@ async def _ingest_upload(
     session,
     description: str = "",
 ) -> tuple:
-    """Save file to disk, ingest into RAG, persist in DB. Returns (doc_record, file_path, chroma_doc_id)."""
+    """Save file to disk, ingest into RAG, persist in DB. Returns (doc_record, file_path, doc_id)."""
     if not file.filename.lower().endswith((".pdf", ".md", ".txt")):
         raise HTTPException(400, "Solo se permiten archivos PDF, Markdown o TXT")
 
@@ -263,13 +296,12 @@ async def chat_with_document(
     file: UploadFile = File(...),
     message: str = Form(""),
     conversation_id: str = Form(""),
-    mode: str = Form("nova"),
     user=Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
     """Upload a document from the chat input. Ingests it into RAG and sends a chat message."""
     # 1. Ingest file
-    doc, _, chroma_doc_id = await _ingest_upload(file, user.id, session)
+    doc, _, doc_id = await _ingest_upload(file, user.id, session)
 
     # 2. Get or create conversation
     if conversation_id:
@@ -278,7 +310,7 @@ async def chat_with_document(
             raise HTTPException(404, "Conversacion no encontrada")
     else:
         title = (message or file.filename)[:60]
-        conv = await repo.create_conversation(session, user.id, title, mode=mode)
+        conv = await repo.create_conversation(session, user.id, title, mode="nova")
 
     # 3. Build history and user message
     user_msg_text = message or f"He subido el archivo: {file.filename}"
@@ -288,27 +320,24 @@ async def chat_with_document(
     await repo.add_message(session, conv.id, "user", user_msg_text)
 
     # 4. Inject document chunks directly so Nova can always see the fresh upload
-    chunks = rag_service.get_document_chunks(chroma_doc_id)
+    chunks = rag_service.get_document_chunks(doc_id)
     extra_ctx = None
     if chunks:
         extra_ctx = (
-            f"[Documento recién subido por el usuario: {file.filename}]\n"
+            f"[{file.filename}]\n"
             + "\n\n".join(c["content"] for c in chunks)
         )
 
     # 5. Generate response
     user_docs = await repo.get_all_documents(session, user.id)
     doc_names = [d.filename for d in user_docs]
-    if mode == "chef":
-        response_text, sources, emotion = await chat_with_chef(
-            user_msg_text, history, user.id,
-        )
-    else:
-        response_text, sources, emotion = await chat_with_rag(
-            user_msg_text, history, user.id,
-            extra_rag_context=extra_ctx,
-            user_docs=doc_names,
-        )
+    messages = await build_messages(
+        user_msg_text, history, user.id,
+        extra_rag_context=extra_ctx,
+        user_docs=doc_names,
+        onboarding=not user.is_onboarded,
+    )
+    response_text, sources, emotion = await chat_nova(messages, user.id)
 
     await repo.add_message(session, conv.id, "assistant", response_text)
 
@@ -359,6 +388,19 @@ async def vision_interpret(
         raise HTTPException(400, "image_base64 requerido")
     result = await interpret_image(image_b64, instruction)
     return {"interpretation": result}
+
+
+# ── Integrations: Google Calendar ─────────────────────────────────────────────
+
+@app.get("/integrations/google/status")
+async def google_status(
+    user=Depends(get_current_user), session: AsyncSession = Depends(get_db),
+):
+    """Calendar access is granted at sign-in; this reports whether it is still stored."""
+    return {
+        "configured": google_calendar.is_configured(),
+        "connected": await google_calendar.is_connected(session, user.id),
+    }
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

@@ -1,37 +1,46 @@
 # Nova Agent
 
-FastAPI + React/Vite AI assistant with RAG, persistent memory, vision, and dual-agent support (Nova + Chefsito via LangGraph).
+Nova is a personal AI assistant — a *digital twin* that manages your memory and acts
+on your behalf through tools. Built on **LangGraph**, it streams its reasoning live
+(you see which tool it's using), does RAG over your own documents, and connects to
+Google Calendar. Auth is **Sign in with Google** only.
 
 ---
 
 ## Architecture
 
 ```
-nova-agent/
-  backend/                   # FastAPI app (Python 3.11+)
+Nova-Agente/
+  backend/                   # FastAPI app (Python 3.11+), port 8010
     app/
-      main.py                # All HTTP endpoints, startup, CORS
+      main.py                # HTTP endpoints, startup, CORS, SSE streaming
       config.py              # Pydantic Settings — reads from .env
-      db.py                  # SQLAlchemy async engine + init_db()
-      models.py              # ORM: User, Conversation, Message, Document
+      db.py                  # SQLAlchemy async engine + init_db() migrations
+      models.py              # ORM: User, Conversation, Message, Document, GoogleCredential
       schemas.py             # Pydantic request/response schemas
-      auth.py                # JWT (HS256) + bcrypt
+      auth.py                # JWT session tokens (HS256)
       repo.py                # Async CRUD layer
-      rag_service.py         # ChromaDB client, embeddings, PDF/MD ingestion
-      gemini_service.py      # Nova: LangChain chat, tool loop, RAG, vision
-      chef_agent.py          # Chefsito: LangGraph graph, long-term store
-      memory_service.py      # Per-user file-based persistent memory (JSON)
-    knowledge_base/          # .md/.txt files auto-ingested on startup
+      llm_provider.py        # Central LLM/embeddings — openai | gemini | ollama
+      rag_service.py         # Pinecone vector store, embeddings, PDF/MD/TXT ingestion
+      nova_agent.py          # Nova: LangGraph StateGraph + astream_nova() event stream
+      nova_tools.py          # The agent's tools (RAG, memory, cooking, calendar, onboarding)
+      google_calendar.py     # Google OAuth login + Calendar API
+      vision.py              # Standalone image interpretation
+      memory_service.py      # Per-user Markdown memory files
+    knowledge_base/          # .md/.txt files auto-ingested on startup (global RAG)
     pdf_uploads/             # Per-user uploads (subfolder per user UUID)
-    chroma_data/             # ChromaDB persistent vectors
-    user_memory/             # Per-user memory JSON files
+    user_memory/             # Per-user memory Markdown files
     nova.db                  # SQLite (auto-created)
-    chef_store.db            # Chefsito LangGraph store (auto-created)
     langgraph.json           # LangGraph Studio config
-  frontend/                  # React 18 + Vite + Tailwind
+  frontend/                  # React 19 + Vite + Tailwind CSS v4, port 5174
     src/
-      App.jsx                # Full SPA: auth, sidebar, chat, docs panel
-      api.js                 # Typed fetch wrappers for all endpoints
+      App.jsx                # Shell: auth gate + sidebar/panel layout
+      context/AppContext.jsx # Auth + conversations state
+      lib/api.js             # Fetch wrappers (incl. SSE streamChat)
+      lib/presets.js         # Quick-start prompt presets
+      components/            # NovaFace, ChatView, MessageBubble, AgentSteps,
+                             #   Composer, Sidebar, AuthScreen, DocsPanel,
+                             #   IntegrationsPanel, PresetGrid, Markdown
   start.ps1                  # One-shot launcher (Windows)
 ```
 
@@ -41,50 +50,85 @@ nova-agent/
 
 | Layer | Tech |
 |---|---|
-| Backend | FastAPI 0.135, Python 3.11, uvicorn |
+| Backend | FastAPI, Python 3.11+, uvicorn |
 | Database | SQLite via SQLAlchemy async (aiosqlite) |
-| Vector store | ChromaDB 1.5 (persistent, local) |
-| Embeddings | Google `gemini-embedding-001` |
-| LLM — primary | `ChatOllama` (qwen3.5:9b at localhost:11434) |
-| LLM — fallback | `ChatGoogleGenerativeAI` (configurable Gemini model) |
-| Agent framework | LangChain (Nova) + LangGraph (Chefsito) |
-| Auth | JWT HS256 + bcrypt |
-| Frontend | React 18, Vite, Tailwind CSS |
-| Observability | LangSmith (optional, disabled by default) |
+| Vector store | Pinecone (serverless, one index / two namespaces) |
+| Agent framework | LangGraph (`StateGraph` + `ToolNode`) |
+| LLM / embeddings | Pluggable: OpenAI (default) · Gemini · Ollama |
+| Auth | Sign in with Google (OAuth2) → JWT session token |
+| Integrations | Google Calendar |
+| Frontend | React 19, Vite, Tailwind CSS v4 |
+| Observability | LangSmith (optional, off by default) |
 
 ---
 
 ## How it works
 
-### Model selection (Ollama-first)
+### Nova — a LangGraph agent
 
-On every cold start, both agents ping `http://localhost:11434/api/tags` with a 2-second timeout and check whether `qwen3.5:9b` is in the list. If yes, `ChatOllama` is used; otherwise it falls back to `ChatGoogleGenerativeAI`. The resolved model is cached for the process lifetime.
+`nova_agent.py` builds a `StateGraph`: an `agente` node (the LLM bound to Nova's tools)
+and a `tools` node (`ToolNode`), looping until the LLM answers without tool calls.
 
-### RAG pipeline
+Tools (`nova_tools.py`):
 
-1. At startup, all files in `knowledge_base/` are ingested into ChromaDB with `user_id=""` (global, visible to all users).
-2. User-uploaded files go to `pdf_uploads/<user_id>/` and are ingested with `user_id=<uuid>`.
-3. On every chat message, `rag_service.search()` queries ChromaDB with the user's message embedding and returns chunks where `user_id == ""` OR `user_id == current_user`.
-4. Results are injected into the system prompt under `--- BASE DE CONOCIMIENTO ---`.
-5. When a file is uploaded directly from chat (`POST /chat/document`), its chunks are fetched by `doc_id` (no semantic search) and prepended as `extra_rag_context` so Nova sees them immediately regardless of query relevance.
+| Tool | What it does |
+|---|---|
+| `establecer_emocion` | Sets Nova's facial expression for the reply |
+| `buscar_en_conocimiento` | RAG search over the user's knowledge base — a *visible* step |
+| `guardar_en_memoria` / `eliminar_de_memoria` | Mutates the user's persistent memory (the "digital twin") |
+| `guardar_preferencia_culinaria` / `guardar_receta` | Cooking skill (the former Chefsito, folded in) |
+| `consultar_calendario` / `crear_evento_calendario` | Reads / writes Google Calendar |
+| `finalizar_onboarding` | Marks the first-run onboarding complete |
 
-### Nova (gemini_service.py)
+### Streaming — you see what it's doing
 
-- LangChain message list: `SystemMessage` (filled system prompt) + history (last 20 turns) + current `HumanMessage`.
-- Tools: `EstablecerEmocion`, `GuardarEnMemoria`, `EliminarDeMemoria` — Pydantic BaseModel schemas bound via `.bind_tools()`.
-- Tool loop: up to 5 rounds of `model.ainvoke()` → `ToolMessage` responses until no tool calls remain.
-- System prompt injects: `{file_memory}` (JSON memory file), `{memory_context}` (semantic memory search), `{user_documents}` (list of all uploaded filenames), `{rag_context}` (RAG chunks).
+`POST /chat/stream` runs the graph via `astream_events` and emits Server-Sent Events:
+`conversation` → a mix of `step` / `token` / `emotion` / `sources` → `done`. The UI
+renders the `step` events as a live "reasoning" panel (e.g. *"Buscando en tu base de
+conocimiento"*, *"Consultando tu Google Calendar"*). `POST /chat` is the non-streaming
+equivalent; `POST /chat/document` ingests an upload then answers.
 
-### Chefsito (chef_agent.py)
+### LLM provider layer
 
-- LangGraph `StateGraph` with a single `chat` node.
-- Long-term memory via `SqliteChefStore` (stdlib sqlite3, `chef_store.db`) — stores per-user preferences and conversation history using `trustcall`.
-- RAG context fetched before entering the graph and passed via `config["configurable"]["rag_context"]`.
-- `_in_studio` flag (`__name__ != "app.chef_agent"`) disables the custom store when running under LangGraph Studio (which rejects non-standard store types).
+All model/embedding calls go through `llm_provider.py`. Set `LLM_PROVIDER` in `.env`:
 
-### Auth
+| `LLM_PROVIDER` | Chat model | Embedding model | Vector dim |
+|---|---|---|---|
+| `openai` (default) | `ChatOpenAI` (`gpt-4o-mini`) | `text-embedding-3-small` | 1536 |
+| `gemini` | `ChatGoogleGenerativeAI` | `gemini-embedding-001` | 768 |
+| `ollama` | `ChatOllama` | `gemini-embedding-001` | 768 |
 
-All endpoints under `/api/` (except `/register` and `/token`) require `Authorization: Bearer <jwt>`. Tokens expire after `ACCESS_TOKEN_EXPIRE_MINUTES` (default 60).
+### RAG pipeline (Pinecone)
+
+One Pinecone index, two namespaces: `knowledge` and `memory`.
+
+1. At startup, files in `knowledge_base/` are ingested with `user_id=""` (global),
+   deduped by an md5 `content_hash`.
+2. User uploads go to `pdf_uploads/<user_id>/` and are ingested with `user_id=<uuid>`.
+   Formats: `.pdf`, `.md`, `.txt`.
+3. `buscar_en_conocimiento` queries Pinecone with a native metadata filter
+   (`user_id ∈ {"", current_user}`).
+4. Files uploaded via `POST /chat/document` have their chunks fetched by `doc_id` and
+   prepended to the prompt as `extra_rag_context`, so Nova always sees the fresh upload.
+
+> **Note:** a Pinecone index has a fixed dimension. It must match the embedding model
+> (see the table above). Switching `LLM_PROVIDER` across that boundary requires a new
+> `PINECONE_INDEX_NAME`.
+
+### Memory & onboarding
+
+Per-user memory ("digital twin") lives as Markdown files in `user_memory/` — Nova reads
+the whole file into its system prompt and mutates it via the memory tools. New users
+have `is_onboarded = false`; while false, Nova runs a natural conversational onboarding
+and calls `finalizar_onboarding` once it knows the user.
+
+### Auth — Sign in with Google
+
+The only sign-in method. `GET /auth/google/login` returns the Google consent URL; a
+single consent grants identity **and** Calendar access. The callback
+(`/integrations/google/callback`) creates/finds the user, stores their OAuth
+credentials, mints a JWT and redirects back to the UI with `?token=`. Stored
+credentials are reused by the calendar tools.
 
 ---
 
@@ -94,26 +138,28 @@ All endpoints under `/api/` (except `/register` and `/token`) require `Authoriza
 
 - Python 3.11+
 - Node.js 18+
-- Google Gemini API key — [aistudio.google.com](https://aistudio.google.com/)
-- (Optional) [Ollama](https://ollama.com/) with `qwen3.5:9b` pulled
+- A **Pinecone** account + API key — [pinecone.io](https://www.pinecone.io/)
+- An LLM key for the active provider (OpenAI by default, or Gemini)
+- A **Google OAuth client** (Web application) — [console.cloud.google.com](https://console.cloud.google.com/)
+  with the Calendar API enabled and `http://localhost:8010/integrations/google/callback`
+  as an authorized redirect URI
 
 ### Backend
 
 ```bash
-cd backend
-python -m venv ../venv
-# Windows
-..\venv\Scripts\activate
-# Linux/Mac
-source ../venv/bin/activate
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
 
+cd backend
 pip install -r requirements.txt
 
 cp .env.example .env
-# Edit .env — at minimum set GEMINI_API_KEY and JWT_SECRET_KEY
+# Edit .env — see "Environment variables" below
 
 uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 ```
+
+Verify with `GET http://localhost:8010/health`. There is no test suite.
 
 ### Frontend
 
@@ -121,87 +167,82 @@ uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 cd frontend
 npm install
 npm run dev
-# → http://localhost:5174  (proxies /api → localhost:8010)
+# → http://localhost:5174  (proxies /api/* → localhost:8010/*)
 ```
 
 ### Windows one-shot
 
 ```powershell
-.\start.ps1           # backend + frontend
-.\start.ps1 -Studio   # + LangGraph Studio on :2024
+.\start.ps1
 ```
 
 ---
 
 ## API endpoints
 
+All endpoints are at the **root** level; the Vite dev proxy maps `/api/*` → `/*`.
+
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/register` | Create account |
-| `POST` | `/api/token` | Login → JWT |
-| `GET` | `/api/me` | Current user |
-| `POST` | `/api/chat` | Send message (JSON) |
-| `POST` | `/api/chat/document` | Upload file + send message (multipart) |
-| `GET` | `/api/conversations` | List conversations |
-| `GET` | `/api/conversations/{id}` | Conversation + messages |
-| `DELETE` | `/api/conversations/{id}` | Delete conversation |
-| `POST` | `/api/documents` | Upload document to RAG |
-| `GET` | `/api/documents` | List user documents |
-| `DELETE` | `/api/documents/{id}` | Delete document + chunks |
-| `POST` | `/api/rag/search` | Raw RAG search |
-| `POST` | `/api/vision/interpret` | Analyze image (base64) |
+| `GET` | `/auth/google/login` | Returns the Google OAuth consent URL |
+| `GET` | `/integrations/google/callback` | OAuth redirect target → mints JWT, redirects to UI |
+| `GET` | `/auth/me` | Current user |
+| `POST` | `/chat` | Send a message (non-streaming JSON) |
+| `POST` | `/chat/stream` | Send a message — **SSE** stream of agent steps + tokens |
+| `POST` | `/chat/document` | Upload a file + send a message (multipart) |
+| `GET` | `/conversations` | List conversations |
+| `GET` | `/conversations/{id}` | Conversation + messages |
+| `DELETE` | `/conversations/{id}` | Delete conversation |
+| `POST` | `/documents` | Upload a document into RAG |
+| `GET` | `/documents` | List the user's documents |
+| `DELETE` | `/documents/{id}` | Delete a document + its vectors |
+| `POST` | `/rag/search` | Raw RAG search |
+| `POST` | `/vision/interpret` | Analyze an image (base64) |
+| `GET` | `/integrations/google/status` | Whether Google/Calendar is configured & connected |
+| `GET` | `/health` | Health check |
 
-### POST /api/chat — request body
+### `POST /chat/stream` — SSE event types
 
-```json
-{
-  "message": "string",
-  "conversation_id": "uuid | null",
-  "image_base64": "string | null",
-  "mode": "nova | chef"
-}
-```
-
-### POST /api/chat/document — multipart form
-
-| Field | Type | Required |
-|---|---|---|
-| `file` | `.pdf / .md / .txt` | yes |
-| `message` | string | no |
-| `conversation_id` | uuid | no |
-| `mode` | `nova \| chef` | no (default `nova`) |
-
----
-
-## Conversation modes
-
-Each conversation has a `mode` column (`nova` or `chef`) set at creation and locked for its lifetime. The frontend shows a locked pill once a conversation has started and routes messages to the correct backend agent.
-
----
-
-## LangGraph Studio
-
-```bash
-# From repo root (venv active):
-cd backend
-langgraph dev --port 2024
-# Open https://smith.langchain.com/studio → connect to localhost:2024
-```
-
-Graph: `chefsito` → `backend/app/chef_agent.py:chef_graph`
-
-The agent auto-detects Studio mode and passes `store=None` to avoid store compatibility errors.
+`conversation` (`{conversation_id}`) · `step` (`{name, label, status, detail}`) ·
+`token` (`{text}`) · `emotion` (`{value}`) · `sources` (`{value: [...]}`) ·
+`done` (`{text, emotion}`) · `error` (`{message}`).
 
 ---
 
 ## Environment variables
 
-See `backend/.env.example` for all variables with descriptions. Required:
+See `backend/.env.example` for the full list. Key ones:
 
 | Variable | Description |
 |---|---|
-| `GEMINI_API_KEY` | Google AI Studio key |
+| `LLM_PROVIDER` | `openai` (default) \| `gemini` \| `ollama` |
+| `OPENAI_API_KEY` | Required when `LLM_PROVIDER=openai` |
+| `GEMINI_API_KEY` | Required for `gemini`, and for embeddings under `ollama` |
+| `PINECONE_API_KEY` | Required — vector store |
+| `PINECONE_INDEX_NAME` | Index name (auto-created on startup with the right dimension) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Required — Sign in with Google + Calendar |
+| `GOOGLE_REDIRECT_URI` | Must match the Google console exactly (default: `http://localhost:8010/integrations/google/callback`) |
 | `JWT_SECRET_KEY` | Random secret, min 32 chars |
 
-Everything else has working defaults.
+Storage paths (`DATABASE_URL`, `PDF_UPLOAD_DIR`, `KNOWLEDGE_BASE_DIR`, `USER_MEMORY_DIR`)
+default to local directories under `backend/` and are created automatically.
 
+### Google OAuth notes
+
+- The Calendar scope is "sensitive", so Google shows an *"app not verified"* screen.
+  It is bypassable via **Advanced → Go to Nova** — full verification is only needed for
+  a public release.
+- In **Testing** mode only emails added as *test users* can sign in. In **Production**
+  anyone can, but each user sees the unverified screen once.
+
+---
+
+## LangGraph Studio (optional)
+
+```bash
+cd backend
+langgraph dev --port 2024
+# Open https://smith.langchain.com/studio → connect to localhost:2024
+```
+
+Graph: `nova` → `backend/app/nova_agent.py:nova_graph`.

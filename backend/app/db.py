@@ -18,10 +18,16 @@ async def init_db() -> None:
     from .models import Base
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Migration: add mode column to existing DBs that predate this column
-        try:
-            await conn.execute(
-                text("ALTER TABLE conversations ADD COLUMN mode VARCHAR(20) NOT NULL DEFAULT 'nova'")
-            )
-        except Exception:
-            pass  # column already exists
+        # Lightweight migrations for DBs that predate a column. Each ALTER is
+        # wrapped on its own so an "already exists" error doesn't skip the rest.
+        migrations = [
+            "ALTER TABLE conversations ADD COLUMN mode VARCHAR(20) NOT NULL DEFAULT 'nova'",
+            "ALTER TABLE users ADD COLUMN is_onboarded BOOLEAN NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN google_sub VARCHAR(64)",
+            "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(500)",
+        ]
+        for stmt in migrations:
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass  # column already exists

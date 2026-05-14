@@ -1,26 +1,10 @@
-"""Auth utilities — JWT + password hashing."""
+"""Auth utilities — JWT session tokens. Identity comes from Google OAuth."""
 
 from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from .config import settings
-
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=12,
-)
-
-
-def hash_password(password: str) -> str:
-    # bcrypt has a 72-byte limit; truncate if needed
-    return pwd_context.hash(password[:72])
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain[:72], hashed)
 
 
 def create_access_token(data: dict) -> str:
@@ -32,7 +16,6 @@ def create_access_token(data: dict) -> str:
 
 def decode_token(token: str) -> dict | None:
     try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
-        return payload
+        return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
     except JWTError:
         return None
