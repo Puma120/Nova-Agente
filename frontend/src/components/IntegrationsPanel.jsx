@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../lib/api";
 import { useApp } from "../context/AppContext";
+import Icon from "./Icon";
 
 export default function IntegrationsPanel() {
   const { token } = useApp();
@@ -22,7 +23,9 @@ export default function IntegrationsPanel() {
 
         <div className="glass-strong rounded-2xl p-5">
           <div className="flex items-start gap-4">
-            <div className="text-3xl">🗓️</div>
+            <div className="w-12 h-12 rounded-xl glass flex items-center justify-center text-nova-violet shrink-0">
+              <Icon name="calendar" className="w-6 h-6" />
+            </div>
             <div className="flex-1">
               <div className="flex items-center gap-3">
                 <h3 className="font-semibold">Google Calendar</h3>

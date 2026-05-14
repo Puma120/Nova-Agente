@@ -1,5 +1,6 @@
 import { useApp } from "../context/AppContext";
 import NovaFace from "./NovaFace";
+import Icon from "./Icon";
 
 function NavButton({ active, onClick, icon, label }) {
   return (
@@ -9,7 +10,7 @@ function NavButton({ active, onClick, icon, label }) {
           ? "glass-strong text-ink glow-violet"
           : "text-muted hover:text-ink hover:bg-white/5"
       }`}>
-      <span className="text-base">{icon}</span>
+      <Icon name={icon} className="w-4 h-4" />
       {label}
     </button>
   );
@@ -38,9 +39,9 @@ export default function Sidebar({ view, setView, onNewChat }) {
 
       <nav className="px-3 space-y-1">
         <NavButton active={view === "docs"} onClick={() => setView("docs")}
-          icon="📚" label="Documentos" />
+          icon="book" label="Documentos" />
         <NavButton active={view === "integrations"} onClick={() => setView("integrations")}
-          icon="🔌" label="Integraciones" />
+          icon="link" label="Integraciones" />
       </nav>
 
       <div className="px-4 pt-4 pb-1 text-[11px] uppercase tracking-wider text-muted/60">

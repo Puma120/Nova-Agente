@@ -2,6 +2,7 @@ import { useState } from "react";
 import * as api from "../lib/api";
 import { useApp } from "../context/AppContext";
 import NovaFace from "./NovaFace";
+import Icon from "./Icon";
 
 function GoogleGlyph() {
   return (
@@ -13,6 +14,13 @@ function GoogleGlyph() {
     </svg>
   );
 }
+
+const FEATURES = [
+  { icon: "memory", title: "Memoria que te conoce", desc: "Gestiona tu gemelo digital" },
+  { icon: "document", title: "RAG sobre tus documentos", desc: "Responde con tu propia información" },
+  { icon: "bolt", title: "Razona a la vista", desc: "Ves cada paso que da el agente" },
+  { icon: "calendar", title: "Actúa por ti", desc: "Integrado con Google Calendar" },
+];
 
 export default function AuthScreen() {
   const { authError } = useApp();
@@ -32,33 +40,63 @@ export default function AuthScreen() {
   };
 
   return (
-    <div className="aurora min-h-screen flex items-center justify-center p-4">
-      <div className="w-full max-w-sm glass-strong rounded-3xl p-8 animate-rise text-center">
-        <div className="flex flex-col items-center mb-7">
-          <div className="glow-violet rounded-full">
-            <NovaFace size={76} mood="happy" />
-          </div>
-          <h1 className="text-3xl font-bold mt-4 gradient-text">Nova</h1>
-          <p className="text-muted text-sm mt-1">
-            Tu asistente personal con agentes inteligentes
-          </p>
+    <div className="aurora h-screen overflow-hidden flex flex-col">
+      {/* Brand bar */}
+      <header className="flex items-center gap-2.5 px-6 py-4 shrink-0">
+        <NovaFace size={30} mood="neutral" />
+        <span className="font-bold gradient-text text-lg">Nova</span>
+      </header>
+
+      {/* Hero */}
+      <main className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center px-6 text-center">
+        <div className="glow-violet rounded-full animate-rise">
+          <NovaFace size={104} mood="happy" />
+        </div>
+        <h1 className="text-5xl sm:text-6xl font-bold mt-5 gradient-text animate-rise">Nova</h1>
+        <p className="text-lg sm:text-xl font-medium mt-3 animate-rise">
+          Tu asistente personal con agentes inteligentes
+        </p>
+        <p className="text-muted mt-2.5 max-w-xl animate-rise">
+          No es un chat más: es tu gemelo digital. Gestiona tu memoria, razona a la
+          vista y actúa por ti con herramientas reales.
+        </p>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-7 w-full max-w-3xl">
+          {FEATURES.map(({ icon, title, desc }) => (
+            <div key={title} className="glass rounded-2xl p-4 text-left">
+              <div className="w-10 h-10 rounded-xl glass-strong flex items-center justify-center text-nova-violet">
+                <Icon name={icon} />
+              </div>
+              <div className="text-sm font-semibold mt-2.5">{title}</div>
+              <div className="text-xs text-muted mt-0.5">{desc}</div>
+            </div>
+          ))}
         </div>
 
         <button onClick={signIn} disabled={loading}
-          className="glass-strong hover:glow-violet w-full flex items-center justify-center gap-3
-                     py-3 rounded-xl font-semibold transition disabled:opacity-50">
+          className="glass-strong hover:glow-violet flex items-center justify-center gap-3
+                     px-6 py-3 rounded-xl font-semibold transition disabled:opacity-50 mt-8">
           <GoogleGlyph />
           {loading ? "Conectando…" : "Continuar con Google"}
         </button>
-
-        <p className="text-muted/70 text-xs mt-4 leading-relaxed">
+        <p className="text-muted/70 text-xs mt-3 max-w-sm">
           Al iniciar sesión, Nova podrá ver tu perfil y gestionar tu Google Calendar.
         </p>
-
         {(error || authError) && (
-          <p className="text-nova-pink text-sm mt-4">{error || authError}</p>
+          <p className="text-nova-pink text-sm mt-3">{error || authError}</p>
         )}
-      </div>
+      </main>
+
+      {/* Lab + authors */}
+      <footer className="glass border-t border-white/5 px-6 py-4 text-center shrink-0">
+        <p className="text-sm font-medium">
+          Laboratorio de Inteligencia Artificial y Realidad Extendida
+        </p>
+        <p className="text-muted text-xs mt-0.5">IBERO Puebla</p>
+        <p className="text-muted/70 text-xs mt-1.5">
+          Autores: Pablo Urbina Macip · Rafael Pérez Aguirre
+        </p>
+      </footer>
     </div>
   );
 }

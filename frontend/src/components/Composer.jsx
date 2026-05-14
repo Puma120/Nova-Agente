@@ -1,4 +1,5 @@
 import { useRef, useState, useImperativeHandle, forwardRef } from "react";
+import Icon from "./Icon";
 
 const Composer = forwardRef(function Composer({ onSend, onSendDocument, disabled }, ref) {
   const [input, setInput] = useState("");
@@ -64,7 +65,7 @@ const Composer = forwardRef(function Composer({ onSend, onSendDocument, disabled
             )}
             {pendingDoc && (
               <div className="glass inline-flex items-center gap-2 rounded-lg px-3 py-1.5">
-                <span className="text-nova-cyan text-sm">📄</span>
+                <Icon name="document" className="w-4 h-4 text-nova-cyan" />
                 <span className="text-sm truncate max-w-[200px]">{pendingDoc.name}</span>
                 <button onClick={() => setPendingDoc(null)} className="text-muted hover:text-nova-pink text-xs">✕</button>
               </div>

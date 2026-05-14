@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import { useApp } from "../context/AppContext";
+import Icon from "./Icon";
 
 export default function DocsPanel() {
   const { token } = useApp();
@@ -60,11 +61,14 @@ export default function DocsPanel() {
           )}
           {docs.map((d) => (
             <div key={d.id} className="glass rounded-2xl px-4 py-3 flex items-center justify-between">
-              <div className="min-w-0">
-                <p className="text-sm font-medium truncate">📄 {d.filename}</p>
-                <p className="text-muted text-xs">
-                  {d.chunk_count} fragmentos · {new Date(d.created_at).toLocaleDateString("es-MX")}
-                </p>
+              <div className="min-w-0 flex items-center gap-2.5">
+                <Icon name="document" className="w-4 h-4 text-nova-violet shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{d.filename}</p>
+                  <p className="text-muted text-xs">
+                    {d.chunk_count} fragmentos · {new Date(d.created_at).toLocaleDateString("es-MX")}
+                  </p>
+                </div>
               </div>
               <button onClick={() => remove(d.id)}
                 className="text-muted hover:text-nova-pink text-xs transition shrink-0 ml-3">

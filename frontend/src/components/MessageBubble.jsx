@@ -1,6 +1,7 @@
 import NovaFace from "./NovaFace";
 import Markdown from "./Markdown";
 import AgentSteps from "./AgentSteps";
+import Icon from "./Icon";
 
 export default function MessageBubble({ message }) {
   const isUser = message.role === "user";
@@ -11,11 +12,13 @@ export default function MessageBubble({ message }) {
         <div className="max-w-[78%] btn-gradient text-white rounded-2xl rounded-br-md px-4 py-2.5">
           <p className="text-[15px] whitespace-pre-wrap leading-relaxed">{message.content}</p>
           {message.image_url && (
-            <span className="text-xs text-white/70 block mt-1">🖼️ Imagen adjunta</span>
+            <span className="flex items-center gap-1 text-xs text-white/70 mt-1">
+              <Icon name="image" className="w-3.5 h-3.5" /> Imagen adjunta
+            </span>
           )}
           {message.doc_name && (
             <span className="inline-flex items-center gap-1 text-xs mt-1.5 bg-white/15 rounded-md px-2 py-0.5">
-              📄 {message.doc_name}
+              <Icon name="document" className="w-3.5 h-3.5" /> {message.doc_name}
             </span>
           )}
         </div>
@@ -52,8 +55,8 @@ export default function MessageBubble({ message }) {
           <div className="flex flex-wrap gap-1.5 mt-2">
             {message.sources.map((s) => (
               <span key={s}
-                className="text-[11px] text-nova-cyan/90 glass rounded-md px-2 py-0.5">
-                📎 {s}
+                className="inline-flex items-center gap-1 text-[11px] text-nova-cyan/90 glass rounded-md px-2 py-0.5">
+                <Icon name="paperclip" className="w-3 h-3" /> {s}
               </span>
             ))}
           </div>

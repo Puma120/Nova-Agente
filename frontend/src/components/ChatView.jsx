@@ -111,14 +111,14 @@ export default function ChatView() {
             patch((m) => ({ ...m, content: ev.text || m.content, emotion: ev.emotion, streaming: false }));
             break;
           case "error":
-            patch((m) => ({ ...m, content: "⚠️ " + ev.message, emotion: "sad", streaming: false }));
+            patch((m) => ({ ...m, content: ev.message, emotion: "sad", streaming: false }));
             break;
           default:
             break;
         }
       });
     } catch (err) {
-      patch((m) => ({ ...m, content: "⚠️ " + err.message, emotion: "sad", streaming: false }));
+      patch((m) => ({ ...m, content: err.message, emotion: "sad", streaming: false }));
     } finally {
       setStreaming(false);
       loadConversations();
@@ -143,7 +143,7 @@ export default function ChatView() {
         : m)));
     } catch (err) {
       setMessages((prev) => prev.map((m) => (m.id === assistantId
-        ? { ...m, content: "⚠️ " + err.message, emotion: "sad", streaming: false }
+        ? { ...m, content: err.message, emotion: "sad", streaming: false }
         : m)));
     } finally {
       setStreaming(false);
